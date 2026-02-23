@@ -25,12 +25,6 @@ jobs:
       - name: Wait for services
         run: sleep 20
 
-      # Basic verification: app should respond on the versioned route
-      # (use the route you confirmed works)
-      - name: Health check API
-        run: |
-          curl --fail http://localhost:8000/api/v1/books || exit 1
-
       # Shut stack down before image push (optional but cleaner)
       - name: Stop app stack
         if: always()

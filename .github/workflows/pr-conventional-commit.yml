@@ -1,81 +1,66 @@
-name: Nightly Build and Push
+name: PR Conventional Commit Check
 
 on:
-  schedule:
-    - cron: "0 0 * * *"   # 12:00 AM UTC nightly
-  workflow_dispatch:       # lets you run it manually for testing
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
 
 permissions:
+  pull-requests: write
   contents: read
-  packages: write
 
 jobs:
-  nightly:
+  validate-pr-title:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Validate PR title follows Conventional Commits
+        id: semantic_pr
+        uses: amannn/action-semantic-pull-request@v6
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and start stack exactly like your professor will
-      - name: Start app stack
-        run: docker compose up -d --build
-
-      # Give services a moment to start
-      - name: Wait for services
-        run: sleep 20
-
-      # Basic verification: app should respond on the versioned route
-      # (use the route you confirmed works)
-      - name: Health check API
-        run: |
-          curl --fail http://localhost:8000/api/v1/does-not-exist || exit 1
-
-      # Shut stack down before image push (optional but cleaner)
-      - name: Stop app stack
-        if: always()
-        run: docker compose down -v
-
-      # Log in to GHCR using GITHUB_TOKEN
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - name: Close PR if title is invalid
+        if: steps.semantic_pr.outcome == 'failure'
+        uses: actions/github-script@v7
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: "Closing this PR because the title does not follow Conventional Commits (e.g., `feat: ...`, `fix: ...`, `docs: ...`). Please rename the PR title and reopen."
+            });
 
-      # Set up Buildx (recommended for build-push-action)
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              state: "closed"
+            });
 
-      # Build and push the web image to GHCR
-      # Adjust file/path if your Dockerfile is in a different location
-      - name: Build and push web image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ghcr.io/${{ github.repository_owner }}/fastapi-beyond-crud:nightly
-
-      # Send email if any earlier step failed
-      - name: Send failure email
-        if: failure()
+      - name: Send email notification on failure
+        if: steps.semantic_pr.outcome == 'failure'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.MAIL_SERVER }}
           server_port: ${{ secrets.MAIL_PORT }}
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "Nightly build failed: ${{ github.repository }}"
+          subject: "PR Closed: Conventional Commit check failed"
           to: ${{ secrets.MAIL_TO }}
           from: ${{ secrets.MAIL_FROM }}
           body: |
-            The nightly build failed for ${{ github.repository }}.
+            A pull request in ${{ github.repository }} was automatically closed because the PR title did not follow Conventional Commits.
 
-            Workflow: ${{ github.workflow }}
-            Run ID: ${{ github.run_id }}
-            Branch: ${{ github.ref_name }}
-            Commit: ${{ github.sha }}
+            PR Title: ${{ github.event.pull_request.title }}
+            PR Number: #${{ github.event.pull_request.number }}
+            PR URL: ${{ github.event.pull_request.html_url }}
 
-            Check the failed run in GitHub Actions for details.
+            Expected format examples:
+            - feat: add user login
+            - fix: correct token validation
+            - docs: update setup instructions
+
+            

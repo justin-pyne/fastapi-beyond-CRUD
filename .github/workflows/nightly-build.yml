@@ -1,0 +1,81 @@
+name: Nightly Build and Push
+
+on:
+  schedule:
+    - cron: "0 0 * * *"   # 12:00 AM UTC nightly
+  workflow_dispatch:       # lets you run it manually for testing
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Build and start stack exactly like your professor will
+      - name: Start app stack
+        run: docker compose up -d --build
+
+      # Give services a moment to start
+      - name: Wait for services
+        run: sleep 20
+
+      # Basic verification: app should respond on the versioned route
+      # (use the route you confirmed works)
+      - name: Health check API
+        run: |
+          curl --fail http://localhost:8000/api/v1/books || exit 1
+
+      # Shut stack down before image push (optional but cleaner)
+      - name: Stop app stack
+        if: always()
+        run: docker compose down -v
+
+      # Log in to GHCR using GITHUB_TOKEN
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Set up Buildx (recommended for build-push-action)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build and push the web image to GHCR
+      # Adjust file/path if your Dockerfile is in a different location
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/fastapi-beyond-crud:nightly
+
+      # Send email if any earlier step failed
+      - name: Send failure email
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "Nightly build failed: ${{ github.repository }}"
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+          body: |
+            The nightly build failed for ${{ github.repository }}.
+
+            Workflow: ${{ github.workflow }}
+            Run ID: ${{ github.run_id }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+
+            Check the failed run in GitHub Actions for details.
